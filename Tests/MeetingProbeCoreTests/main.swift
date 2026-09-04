@@ -69,6 +69,21 @@ runner.test("process classification") {
       bundleID: "com.apple.Safari.SandboxBroker"
     ),
     "Safari helper should not appear as a main app")
+  runner.expect(
+    ProcessClassifier.platform(bundleID: "company.thebrowser.dia") == .googleMeet,
+    "Dia should classify as Google Meet evidence")
+  runner.expect(
+    ProcessClassifier.platform(bundleID: "company.thebrowser.dia.helper") == .googleMeet,
+    "Dia helper should classify as Google Meet evidence")
+  runner.expect(
+    ProcessClassifier.platform(bundleID: nil, processName: "Dia Helper") == .googleMeet,
+    "Dia process-name fallback should classify")
+  runner.expect(
+    ProcessClassifier.isSupportedMainApplication(bundleID: "company.thebrowser.dia"),
+    "Dia main app should be supported")
+  runner.expect(
+    !ProcessClassifier.isSupportedMainApplication(bundleID: "company.thebrowser.dia.helper"),
+    "Dia helper should not appear as a main app")
 }
 
 runner.test("Meet Accessibility reduction") {
@@ -534,6 +549,82 @@ runner.test("daemon runtime emits NDJSON-shaped events") {
   runner.expect(line.contains("\"meeting_id\""), "meeting_id key encoded")
 }
 
+runner.test("desktop notification on meeting_started only") {
+  final class RecordingNotifier: DesktopNotifier, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [(platform: MeetingPlatform, meetingID: String)] = []
+
+    func postMeetingDetected(platform: MeetingPlatform, meetingID: String) {
+      lock.lock()
+      storage.append((platform, meetingID))
+      lock.unlock()
+    }
+
+    func posts() -> [(platform: MeetingPlatform, meetingID: String)] {
+      lock.lock()
+      defer { lock.unlock() }
+      return storage
+    }
+  }
+
+  let notifier = RecordingNotifier()
+  let collector = CollectingEventEmitter()
+  let emitter = CompositeEventEmitter([
+    collector,
+    DesktopNotificationEventEmitter(notifier: notifier),
+  ])
+
+  let started = MeetingEvent(
+    event: .meetingStarted,
+    platform: .googleMeet,
+    timestamp: "t0",
+    meetingID: "meet-1",
+    confidence: 0.95
+  )
+  let ended = MeetingEvent(
+    event: .meetingEnded,
+    platform: .googleMeet,
+    timestamp: "t1",
+    meetingID: "meet-1"
+  )
+  let huddle = MeetingEvent(
+    event: .meetingStarted,
+    platform: .slackHuddle,
+    timestamp: "t2",
+    meetingID: "huddle-1",
+    confidence: 0.9
+  )
+
+  try emitter.emit(started)
+  try emitter.emit(ended)
+  try emitter.emit(huddle)
+
+  let events = collector.events()
+  runner.expect(events.count == 3, "composite forwards all events")
+
+  let posts = notifier.posts()
+  runner.expect(posts.count == 2, "only meeting_started notifies")
+  runner.expect(posts[0].platform == .googleMeet, "Meet notify platform")
+  runner.expect(posts[0].meetingID == "meet-1", "Meet notify id")
+  runner.expect(posts[1].platform == .slackHuddle, "Huddle notify platform")
+  runner.expect(
+    MeetingPlatform.googleMeet.displayName == "Google Meet",
+    "Meet display name"
+  )
+  runner.expect(
+    MeetingPlatform.slackHuddle.displayName == "Slack Huddle",
+    "Huddle display name"
+  )
+  runner.expect(
+    !DesktopNotifierSupport.canUseUserNotifications(),
+    "test process is not an .app; UN path disabled"
+  )
+  runner.expect(
+    AppleScriptDesktopNotifier.escape("a\"b\\c") == "a\\\"b\\\\c",
+    "AppleScript escape"
+  )
+}
+
 runner.test("daemon CLI options") {
   let options = try DaemonOptions.parse([
     "run",
@@ -547,6 +638,10 @@ runner.test("daemon CLI options") {
   runner.expect(options.startConfirmations == 2, "start confirmations")
   runner.expect(options.endConfirmations == 3, "end confirmations")
   runner.expect(options.statusPath == "/tmp/meetingd-status.json", "status path")
+  runner.expect(options.notify, "notify defaults on")
+
+  let quiet = try DaemonOptions.parse(["run", "--no-notify"])
+  runner.expect(!quiet.notify, "no-notify disables banners")
 
   do {
     _ = try DaemonOptions.parse(["record"])

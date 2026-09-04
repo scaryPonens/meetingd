@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import MeetingProbeCore
 
@@ -9,7 +10,59 @@ private func writeStandardError(_ line: String) {
   FileHandle.standardError.write(Data((line + "\n").utf8))
 }
 
+private func bootstrapAppKit(foreground: Bool) {
+  let app = NSApplication.shared
+  app.setActivationPolicy(foreground ? .regular : .accessory)
+  if foreground {
+    app.activate(ignoringOtherApps: true)
+  }
+}
+
+private func accessibilitySettingsURL() -> URL? {
+  URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+}
+
+private func waitForAccessibilityGrant() {
+  bootstrapAppKit(foreground: true)
+  _ = SystemCollectors.accessibilityIsTrusted(prompt: true)
+  if let url = accessibilitySettingsURL() {
+    NSWorkspace.shared.open(url)
+  }
+
+  while !SystemCollectors.accessibilityIsTrusted(prompt: false) {
+    let alert = NSAlert()
+    alert.messageText = "Allow MeetingProbe in Accessibility"
+    alert.informativeText = """
+      System Settings → Privacy & Security → Accessibility should now be open.
+
+      1. Click +
+      2. Press Cmd+Shift+G and paste:
+      \(Bundle.main.bundlePath)
+      3. Enable MeetingProbe
+      4. Click Recheck here
+
+      Leave this dialog open until Recheck succeeds. Do not rebuild the app in between.
+      """
+    alert.addButton(withTitle: "Recheck")
+    alert.addButton(withTitle: "Open Settings")
+    alert.addButton(withTitle: "Continue without Accessibility")
+    NSApp.activate(ignoringOtherApps: true)
+    let response = alert.runModal()
+    if response == .alertSecondButtonReturn {
+      if let url = accessibilitySettingsURL() {
+        NSWorkspace.shared.open(url)
+      }
+      continue
+    }
+    if response == .alertThirdButtonReturn {
+      return
+    }
+  }
+}
+
 private func run() throws {
+  bootstrapAppKit(foreground: false)
+
   let options = try ProbeOptions.parse(Array(CommandLine.arguments.dropFirst()))
   if options.showHelp {
     writeStandardOutput(ProbeOptions.usage)
@@ -17,7 +70,7 @@ private func run() throws {
   }
 
   if options.requestAccessibility {
-    _ = SystemCollectors.accessibilityIsTrusted(prompt: true)
+    waitForAccessibilityGrant()
   }
 
   let sampler = ProbeSampler(

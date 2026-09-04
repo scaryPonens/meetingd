@@ -20,11 +20,15 @@ let package = Package(
         .linkedFramework("AppKit"),
         .linkedFramework("CoreAudio"),
         .linkedFramework("IOKit"),
+        .linkedFramework("UserNotifications"),
       ]
     ),
     .executableTarget(
       name: "MeetingProbe",
-      dependencies: ["MeetingProbeCore"]
+      dependencies: ["MeetingProbeCore"],
+      linkerSettings: [
+        .linkedFramework("AppKit")
+      ]
     ),
     .executableTarget(
       name: "MeetingDaemon",

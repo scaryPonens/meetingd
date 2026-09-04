@@ -65,6 +65,20 @@ public struct StdoutNDJSONEventEmitter: EventEmitter {
   }
 }
 
+public struct CompositeEventEmitter: EventEmitter {
+  private let emitters: [any EventEmitter]
+
+  public init(_ emitters: [any EventEmitter]) {
+    self.emitters = emitters
+  }
+
+  public func emit(_ event: MeetingEvent) throws {
+    for emitter in emitters {
+      try emitter.emit(event)
+    }
+  }
+}
+
 public final class CollectingEventEmitter: EventEmitter, @unchecked Sendable {
   private let lock = NSLock()
   private var storage: [MeetingEvent] = []

@@ -7,6 +7,7 @@ public enum ProcessClassifier {
     "com.brave.browser",
     "org.chromium.chromium",
     "company.thebrowser.browser",
+    "company.thebrowser.dia",
     "com.apple.safari",
   ]
 
@@ -24,6 +25,7 @@ public enum ProcessClassifier {
     "com.brave.browser.nightly",
     "org.chromium.chromium",
     "company.thebrowser.browser",
+    "company.thebrowser.dia",
     "com.apple.safari",
     "com.apple.safaritechnologypreview",
     "com.tinyspeck.slackmacgap",
@@ -37,6 +39,7 @@ public enum ProcessClassifier {
     "microsoft edge",
     "brave browser",
     "arc",
+    "dia",
     "safari",
   ]
 

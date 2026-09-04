@@ -12,13 +12,14 @@
 
 Without Accessibility permission, `meeting-probe` still reports application presence, Core Audio process activity, and power assertions. Accessibility fields report `ax_status=permission_denied`; they are not silently treated as negative evidence.
 
-To start the macOS Accessibility permission flow:
+To start the macOS Accessibility permission flow, install the app bundle first (bare CLI binaries often never appear in System Settings):
 
 ```sh
-swift run meeting-probe --request-accessibility --once
+./scripts/install-meeting-probe-app.sh
+"$HOME/.local/bin/meeting-probe" --request-accessibility --once
 ```
 
-macOS returns the current authorization immediately and opens the relevant System Settings flow asynchronously when access is missing. After enabling the executable under **System Settings → Privacy & Security → Accessibility**, restart the probe. Development builds can move as Swift rebuilds them; if macOS retains a stale entry, remove it, run the command again, and enable the newly presented executable.
+Then enable **MeetingProbe** under **System Settings → Privacy & Security → Accessibility** and restart the probe. Re-running the install script changes the ad-hoc code hash and usually requires re-enabling Accessibility.
 
 ## Data handling
 
@@ -46,5 +47,7 @@ The scan is capped per process (`--max-ax-nodes`, default `3000`) to bound work.
 ## meetingd
 
 `meetingd` uses the same collectors as the probe. Accessibility is strongly recommended because joined-call controls are the primary participation signal. When Accessibility is unavailable, the daemon may fall back to WebRTC power assertions combined with Core Audio activity; that path is secondary and less precise.
+
+On each `meeting_started`, `meetingd` also posts a local desktop notification (`Google Meet detected` / `Slack Huddle detected`) unless `--no-notify` is set. Bare CLI builds use AppleScript (`osascript`) banners because `UserNotifications` crashes without an `.app` bundle. Packaged builds can use `UserNotifications` when available. Denial/fallback is non-fatal and NDJSON events still emit.
 
 Recording and transcription remain out of scope. Do not add Microphone or Screen Recording permission for detection.

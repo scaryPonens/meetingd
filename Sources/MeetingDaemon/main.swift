@@ -14,6 +14,18 @@ private func runCommand(_ options: DaemonOptions) throws {
     _ = SystemCollectors.accessibilityIsTrusted(prompt: true)
   }
 
+  var emitters: [any EventEmitter] = [StdoutNDJSONEventEmitter()]
+  if options.notify {
+    if DesktopNotifierSupport.canUseUserNotifications() {
+      if !UserNotificationsDesktopNotifier.requestAuthorization() {
+        writeStandardError(
+          "meetingd: Notifications not granted; continuing without desktop banners (use --no-notify to silence)"
+        )
+      }
+    }
+    emitters.append(DesktopNotificationEventEmitter())
+  }
+
   let sampler = ProbeSampler(
     maxAccessibilityNodesPerApplication: options.maxAccessibilityNodes
   )
@@ -22,6 +34,7 @@ private func runCommand(_ options: DaemonOptions) throws {
       startConfirmations: options.startConfirmations,
       endConfirmations: options.endConfirmations
     ),
+    emitter: CompositeEventEmitter(emitters),
     statusURL: options.statusURL
   )
 

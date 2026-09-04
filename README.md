@@ -11,7 +11,7 @@ Recording, transcription, audio capture, screenshots, cloud services, and meetin
 - macOS 14.2 or newer for Core Audio process metadata
 - Swift 6.2 or newer
 - Native Slack for Huddle testing
-- A supported Meet browser: Google Chrome, Chromium, Microsoft Edge, Brave, Arc, or Safari
+- A supported Meet browser: Google Chrome, Chromium, Microsoft Edge, Brave, Arc, Dia, or Safari
 - Accessibility permission for reliable joined-call UI detection
 
 ## Build
@@ -22,26 +22,34 @@ swift build
 
 ## Install
 
+Install `meeting-probe` as an app bundle so it can appear in Accessibility settings:
+
+```sh
+./scripts/install-meeting-probe-app.sh
+```
+
+Install `meetingd` on PATH:
+
 ```sh
 swift build --configuration release
 mkdir -p "$HOME/.local/bin"
-install -m 755 .build/release/meeting-probe "$HOME/.local/bin/meeting-probe"
 install -m 755 .build/release/meetingd "$HOME/.local/bin/meetingd"
 ```
 
-Grant Accessibility to the installed `meetingd` binary under **System Settings → Privacy & Security → Accessibility**. Rebuild and reinstall after source changes so macOS keeps a stable path.
+Grant Accessibility to **MeetingProbe** under **System Settings → Privacy & Security → Accessibility** after the app-bundle install. Re-run `install-meeting-probe-app.sh` after source changes, then re-enable Accessibility if trust drops (ad-hoc signing).
 
 Uninstall:
 
 ```sh
 rm -f "$HOME/.local/bin/meeting-probe" "$HOME/.local/bin/meetingd"
+rm -rf "$HOME/Applications/MeetingProbe.app"
 rm -rf "$HOME/Library/Application Support/meetingd"
 rm -f "$HOME/Library/LaunchAgents/com.meetingd.agent.plist"
 # if loaded:
 launchctl bootout "gui/$(id -u)/com.meetingd.agent" 2>/dev/null || true
 ```
 
-Remove the Accessibility entries for the binaries if present.
+Remove Accessibility entries in System Settings if present.
 
 ## meeting-probe
 
@@ -65,11 +73,13 @@ meeting-probe --json
 
 ## meetingd
 
-Run the daemon (NDJSON events on stdout; status file updated each poll):
+Run the daemon (NDJSON events on stdout; desktop notification on `meeting_started`; status file updated each poll):
 
 ```sh
 meetingd run --interval 1
 ```
+
+Pass `--no-notify` to disable banners (NDJSON events still emit). Allow Notifications for `meetingd` when macOS prompts.
 
 Example events:
 
@@ -114,6 +124,7 @@ launchctl bootout "gui/$(id -u)/com.meetingd.agent"
 | Permission | Required? | Why |
 |---|---:|---|
 | Accessibility | Strongly recommended | Joined-call control labels are the primary participation signal |
+| Notifications | Optional | Desktop banner when a meeting starts (`meetingd run`; disable with `--no-notify`) |
 | Microphone | No | Core Audio process metadata only |
 | Screen Recording | No | No pixels or titles from capture APIs |
 | Automation | No | Browser tab URLs deferred |

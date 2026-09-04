@@ -126,9 +126,6 @@ public enum StatusFormatter {
   }
 
   private static func displayName(_ platform: MeetingPlatform) -> String {
-    switch platform {
-    case .googleMeet: "Google Meet"
-    case .slackHuddle: "Slack Huddle"
-    }
+    platform.displayName
   }
 }

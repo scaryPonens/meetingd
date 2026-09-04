@@ -20,6 +20,7 @@ Live join/leave of Google Meet and Slack Huddle was not performed in this automa
 | Safari | installed / running during baseline |
 | Google Chrome | not installed |
 | Arc (`company.thebrowser.browser`) | helpers observed via Core Audio |
+| Dia (`company.thebrowser.dia`) | 1.47.1 at `/Applications/Dia.app`; added as a Meet main app so AX scans Dia, not only Arc-style helpers |
 | Slack | 4.52.155 (installed; not running during baseline) |
 | Accessibility trusted | `false` during baseline |
 | Probe interval for baseline | 1s × 5 samples |

@@ -15,6 +15,7 @@ public struct DaemonOptions: Equatable, Sendable {
   public var startConfirmations = 2
   public var endConfirmations = 3
   public var statusPath: String?
+  public var notify = true
   public var showHelp = false
 
   public init() {}
@@ -51,6 +52,8 @@ public struct DaemonOptions: Equatable, Sendable {
         options.command = .help
       case "--request-accessibility":
         options.requestAccessibility = true
+      case "--no-notify":
+        options.notify = false
       case "--interval":
         index += 1
         guard index < arguments.count,
@@ -139,6 +142,7 @@ public struct DaemonOptions: Equatable, Sendable {
       --end-confirmations COUNT     Consecutive non-participating polls to end (default: 3)
       --status-file PATH            Status JSON path (default: ~/Library/Application Support/meetingd/status.json)
       --request-accessibility       Ask macOS to open the Accessibility permission flow
+      --no-notify                   Disable desktop notifications on meeting_started
       -h, --help                    Show this help
     """
 }

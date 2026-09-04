@@ -3,6 +3,13 @@ import Foundation
 public enum MeetingPlatform: String, Codable, CaseIterable, Sendable {
   case googleMeet = "google_meet"
   case slackHuddle = "slack_huddle"
+
+  public var displayName: String {
+    switch self {
+    case .googleMeet: "Google Meet"
+    case .slackHuddle: "Slack Huddle"
+    }
+  }
 }
 
 public struct ApplicationSignal: Codable, Equatable, Sendable {
