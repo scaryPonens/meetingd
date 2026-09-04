@@ -1,8 +1,8 @@
 # meetingd
 
-Local-first macOS meeting lifecycle detection research and probe for Google Meet and Slack Huddles.
+Local-first macOS meeting lifecycle detection for Google Meet and Slack Huddles.
 
-This repository is currently at the **signal-validation milestone**. It contains `meeting-probe`, which continuously reports locally observable evidence. It does not yet decide meeting lifecycle or emit `meeting_started`/`meeting_ended`; those rules would be premature until the signals are tested during real calls.
+`meeting-probe` reports raw evidence. `meetingd` turns validated signal combinations into `meeting_started` / `meeting_ended` NDJSON events with an explicit lifecycle state machine.
 
 Recording, transcription, audio capture, screenshots, cloud services, and meeting-content inspection are intentionally absent.
 
@@ -12,6 +12,7 @@ Recording, transcription, audio capture, screenshots, cloud services, and meetin
 - Swift 6.2 or newer
 - Native Slack for Huddle testing
 - A supported Meet browser: Google Chrome, Chromium, Microsoft Edge, Brave, Arc, or Safari
+- Accessibility permission for reliable joined-call UI detection
 
 ## Build
 
@@ -19,137 +20,148 @@ Recording, transcription, audio capture, screenshots, cloud services, and meetin
 swift build
 ```
 
-## Install the probe
-
-Build an optimized binary and copy it onto the user PATH:
+## Install
 
 ```sh
 swift build --configuration release
 mkdir -p "$HOME/.local/bin"
 install -m 755 .build/release/meeting-probe "$HOME/.local/bin/meeting-probe"
+install -m 755 .build/release/meetingd "$HOME/.local/bin/meetingd"
 ```
 
-Grant Accessibility only after installing so macOS records the stable installed path. Rebuild and repeat the `install` command after source changes.
+Grant Accessibility to the installed `meetingd` binary under **System Settings → Privacy & Security → Accessibility**. Rebuild and reinstall after source changes so macOS keeps a stable path.
 
-Uninstall the probe:
+Uninstall:
 
 ```sh
-rm "$HOME/.local/bin/meeting-probe"
+rm -f "$HOME/.local/bin/meeting-probe" "$HOME/.local/bin/meetingd"
+rm -rf "$HOME/Library/Application Support/meetingd"
+rm -f "$HOME/Library/LaunchAgents/com.meetingd.agent.plist"
+# if loaded:
+launchctl bootout "gui/$(id -u)/com.meetingd.agent" 2>/dev/null || true
 ```
 
-The probe creates no configuration, cache, LaunchAgent, or application-support files. Remove its Accessibility entry in System Settings if it was granted.
+Remove the Accessibility entries for the binaries if present.
 
-## Run the probe
+## meeting-probe
 
 One snapshot:
 
 ```sh
-swift run meeting-probe --once
+meeting-probe --once
 ```
 
-Continuous human-readable output, every three seconds by default:
+Continuous evidence (default interval 3s):
 
 ```sh
-swift run meeting-probe
+meeting-probe --interval 1
 ```
 
-Faster polling for a manual call test:
+NDJSON evidence:
 
 ```sh
-swift run meeting-probe --interval 1
+meeting-probe --json
 ```
 
-Newline-delimited JSON:
+## meetingd
+
+Run the daemon (NDJSON events on stdout; status file updated each poll):
 
 ```sh
-swift run meeting-probe --json
+meetingd run --interval 1
 ```
 
-Show every option:
+Example events:
+
+```json
+{"confidence":0.95,"event":"meeting_started","meeting_id":"…","platform":"google_meet","timestamp":"…"}
+{"event":"meeting_ended","meeting_id":"…","platform":"google_meet","timestamp":"…"}
+```
+
+Inspect the latest evaluated state:
 
 ```sh
-swift run meeting-probe --help
+meetingd status
 ```
 
-The output deliberately describes evidence rather than a final `active` boolean. Example fields:
+Inspect one raw probe plus confidence/signals:
 
-- `app_running`: a supported browser or Slack main app is running;
-- `collectors`: distinguishes successful, unsupported, and failed Core Audio or power-assertion collection from an empty result;
-- `audio_input` / `audio_output`: a classified Core Audio process has an active stream;
-- `webrtc_peer_connection`: a classified process owns a power assertion containing `WebRTC` or `PeerConnection`;
-- `ax_status`: whether semantic UI scanning succeeded, lacks permission, was truncated, or had no target app;
-- `ax_joined_controls`: the exact joined-call control set was observed;
-- platform-specific Accessibility fields explaining that result;
-- indented `audio` and `assertion` records identifying the contributing local processes.
+```sh
+meetingd debug --request-accessibility
+```
 
-None of these fields alone is currently treated as meeting participation.
+### LaunchAgent
+
+1. Copy [docs/launchagent/com.meetingd.agent.plist](docs/launchagent/com.meetingd.agent.plist).
+2. Replace `REPLACE_ME` with your username and confirm the `meetingd` path.
+3. Create the log directory: `mkdir -p "$HOME/Library/Logs/meetingd"`.
+4. Install and load:
+
+```sh
+cp docs/launchagent/com.meetingd.agent.plist "$HOME/Library/LaunchAgents/com.meetingd.agent.plist"
+# edit paths, then:
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.meetingd.agent.plist"
+```
+
+Unload:
+
+```sh
+launchctl bootout "gui/$(id -u)/com.meetingd.agent"
+```
 
 ## Permissions
 
-The low-permission signals work immediately. Accessibility is optional for running the probe and necessary to evaluate its strongest UI hypothesis:
+| Permission | Required? | Why |
+|---|---:|---|
+| Accessibility | Strongly recommended | Joined-call control labels are the primary participation signal |
+| Microphone | No | Core Audio process metadata only |
+| Screen Recording | No | No pixels or titles from capture APIs |
+| Automation | No | Browser tab URLs deferred |
 
-```sh
-swift run meeting-probe --request-accessibility --once
-```
-
-No Microphone, Screen Recording, Camera, or Automation permission is requested. See [Permissions and privacy](docs/permissions.md).
+See [docs/permissions.md](docs/permissions.md).
 
 ## Tests
-
-Run the zero-dependency deterministic harness:
 
 ```sh
 swift run meeting-probe-tests
 ```
 
-It covers process classification, Meet lobby versus joined-control reduction, Slack Huddle control reduction, platform aggregation, injected collection providers, human/JSON output, and CLI option boundaries.
+Covers classification, AX reduction, confidence policy, lifecycle hysteresis, daemon runtime events, and CLI parsing.
 
 ## Architecture
 
 ```text
-meeting-probe executable
+meeting-probe / meetingd
         |
         v
-ProbeSampler                  injectable provider boundary
-        |
-        +-- NSWorkspace       supported app presence
-        +-- Core Audio        per-process input/output state
-        +-- IOKit             process power assertions
-        +-- AXUIElement       reduced call-control evidence
+ProbeSampler                  injectable collectors
         |
         v
-ProbeSnapshot                 raw structured evidence
+ProbeSnapshot                 raw evidence
         |
-        +-- human formatter
-        +-- NDJSON formatter
+        v
+ConfidenceEvaluator           participating + confidence + signals
+        |
+        v
+LifecycleStateMachine         IDLE → POSSIBLE_MEETING → ACTIVE → POSSIBLE_END
+        |
+        +-- EventEmitter      NDJSON stdout (extensible)
+        +-- StatusStore       ~/Library/Application Support/meetingd/status.json
 ```
 
-Collection, evidence reduction, and formatting live in `MeetingProbeCore`. The executable owns only argument parsing, polling, and stdout/stderr. No lifecycle state machine or event emitter has been introduced.
+Default hysteresis: 2 consecutive participating polls to start, 3 to end (at a 1s `meetingd run` interval). Policy details live in [docs/validation-results.md](docs/validation-results.md).
 
-## Research and validation
+## Docs
 
-- [Signal research and ranking](docs/signal-research.md)
-- [Manual Meet and Slack validation procedure](docs/manual-validation.md)
-- [Permissions and privacy](docs/permissions.md)
+- [Signal research](docs/signal-research.md)
+- [Manual validation procedure](docs/manual-validation.md)
+- [Validation results / detector policy](docs/validation-results.md)
+- [Permissions](docs/permissions.md)
+- [Original product brief](docs/prompt.md)
 
-Manual validation is mandatory before implementing `meetingd`. It must cover lobby/invitation false positives, muted and backgrounded participation, stale tabs/channels after leaving, app crashes, sleep/wake, transient signal loss, and call switching.
+## Troubleshooting
 
-## Current boundary
-
-Implemented:
-
-- native, local signal collection;
-- bounded semantic Accessibility scans;
-- continuous human and NDJSON diagnostic output;
-- injectable collectors and deterministic tests;
-- permission/privacy and manual-validation documentation.
-
-Deferred until validation evidence exists:
-
-- confidence thresholds;
-- debounce and hysteresis durations;
-- lifecycle states;
-- `meeting_started` and `meeting_ended` events;
-- background daemon and LaunchAgent;
-- installation/uninstallation of a daemon;
-- all recording and transcription behavior.
+- `meetingd status` fails: run `meetingd run` at least once, or pass `--status-file`.
+- AX fields stay `permission_denied`: grant Accessibility to the installed binary and restart it.
+- False starts without Accessibility: fallback requires WebRTC **and** audio; prefer granting Accessibility.
+- No events while in a call: run `meetingd debug` and check `ax_joined_controls`, `webrtc_peer_connection`, and audio flags.

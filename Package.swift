@@ -9,6 +9,7 @@ let package = Package(
   ],
   products: [
     .executable(name: "meeting-probe", targets: ["MeetingProbe"]),
+    .executable(name: "meetingd", targets: ["MeetingDaemon"]),
     .executable(name: "meeting-probe-tests", targets: ["MeetingProbeTests"]),
   ],
   targets: [
@@ -23,6 +24,10 @@ let package = Package(
     ),
     .executableTarget(
       name: "MeetingProbe",
+      dependencies: ["MeetingProbeCore"]
+    ),
+    .executableTarget(
+      name: "MeetingDaemon",
       dependencies: ["MeetingProbeCore"]
     ),
     .executableTarget(

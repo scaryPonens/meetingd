@@ -43,6 +43,8 @@ An open Meet tab, a running Slack process, browser audio, or a WebRTC connection
 
 The scan is capped per process (`--max-ax-nodes`, default `3000`) to bound work. Only exact English control labels are recognized. Manual testing must determine whether these selectors survive backgrounding, minimizing, Spaces, and current application versions before Accessibility becomes a required permission for `meetingd`.
 
-## Future permission rule
+## meetingd
 
-The future daemon must request only permissions proven necessary by manual validation. Recording and transcription remain out of scope. Do not add Microphone or Screen Recording permission preemptively for future features.
+`meetingd` uses the same collectors as the probe. Accessibility is strongly recommended because joined-call controls are the primary participation signal. When Accessibility is unavailable, the daemon may fall back to WebRTC power assertions combined with Core Audio activity; that path is secondary and less precise.
+
+Recording and transcription remain out of scope. Do not add Microphone or Screen Recording permission for detection.

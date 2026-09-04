@@ -305,6 +305,257 @@ runner.test("CLI options") {
   }
 }
 
+private func meetEvidence(
+  joined: Bool,
+  appRunning: Bool = true,
+  webrtc: Bool = false,
+  audioIn: Bool = false,
+  audioOut: Bool = false,
+  axStatus: AccessibilityScanStatus = .ok,
+  meetTabs: Int = 0
+) -> PlatformEvidence {
+  var accessibility = AccessibilityEvidence(platform: .googleMeet, status: axStatus)
+  if joined {
+    accessibility.meetWebAreaCount = 1
+    accessibility.meetCallControls = true
+    accessibility.meetLeaveCallControl = true
+    accessibility.meetPresentationControl = true
+  }
+  accessibility.meetTabCount = meetTabs
+  return PlatformEvidence(
+    platform: .googleMeet,
+    runningApplications: appRunning ? ["Google Chrome"] : [],
+    audioInputActive: audioIn,
+    audioOutputActive: audioOut,
+    webRTCPeerConnection: webrtc,
+    accessibility: accessibility
+  )
+}
+
+private func slackEvidence(
+  joined: Bool,
+  appRunning: Bool = true,
+  inviteWindow: Bool = false,
+  axStatus: AccessibilityScanStatus = .ok
+) -> PlatformEvidence {
+  var accessibility = AccessibilityEvidence(platform: .slackHuddle, status: axStatus)
+  accessibility.slackHuddleWindow = inviteWindow || joined
+  if joined {
+    accessibility.slackHuddleToolbar = true
+    accessibility.slackLeaveHuddleControl = true
+  }
+  return PlatformEvidence(
+    platform: .slackHuddle,
+    runningApplications: appRunning ? ["Slack"] : [],
+    audioInputActive: false,
+    audioOutputActive: false,
+    webRTCPeerConnection: false,
+    accessibility: accessibility
+  )
+}
+
+runner.test("confidence ignores lobby and invite") {
+  let lobby = ConfidenceEvaluator.evaluate(
+    meetEvidence(joined: false, meetTabs: 1)
+  )
+  runner.expect(!lobby.participating, "Meet lobby must not participate")
+  runner.expect(lobby.confidence == 0.20, "Meet tab context should be low confidence")
+
+  let invite = ConfidenceEvaluator.evaluate(
+    slackEvidence(joined: false, inviteWindow: true)
+  )
+  runner.expect(!invite.participating, "Huddle invite/window alone must not participate")
+}
+
+runner.test("confidence accepts joined AX and fallback media") {
+  let joined = ConfidenceEvaluator.evaluate(meetEvidence(joined: true))
+  runner.expect(joined.participating, "joined AX controls should participate")
+  runner.expect(joined.confidence == 0.95, "joined AX confidence")
+
+  let fallback = ConfidenceEvaluator.evaluate(
+    meetEvidence(
+      joined: false,
+      webrtc: true,
+      audioIn: true,
+      axStatus: .permissionDenied
+    )
+  )
+  runner.expect(fallback.participating, "AX-denied WebRTC+audio fallback should participate")
+  runner.expect(fallback.confidence == 0.75, "fallback confidence")
+}
+
+runner.test("Meet lifecycle join and leave") {
+  var machine = LifecycleStateMachine(
+    platform: .googleMeet,
+    configuration: LifecycleConfiguration(startConfirmations: 2, endConfirmations: 3),
+    makeMeetingID: { "meet-1" }
+  )
+
+  let lobby = ConfidenceEvaluator.evaluate(meetEvidence(joined: false, meetTabs: 1))
+  runner.expect(machine.observe(lobby, at: "t0").events.isEmpty, "lobby emits nothing")
+
+  let joined = ConfidenceEvaluator.evaluate(meetEvidence(joined: true))
+  runner.expect(machine.observe(joined, at: "t1").events.isEmpty, "first join poll waits")
+  let started = machine.observe(joined, at: "t2")
+  runner.expect(started.events.count == 1, "second join poll starts meeting")
+  runner.expect(started.events.first?.event == .meetingStarted, "emits meeting_started")
+  runner.expect(started.state == .active, "state becomes ACTIVE")
+
+  let muted = ConfidenceEvaluator.evaluate(
+    meetEvidence(joined: true, audioIn: false, audioOut: false)
+  )
+  runner.expect(machine.observe(muted, at: "t3").events.isEmpty, "mute remains active")
+
+  let background = ConfidenceEvaluator.evaluate(meetEvidence(joined: true))
+  runner.expect(machine.observe(background, at: "t4").events.isEmpty, "background remains active")
+
+  let left = ConfidenceEvaluator.evaluate(meetEvidence(joined: false, meetTabs: 1))
+  runner.expect(machine.observe(left, at: "t5").events.isEmpty, "first leave poll waits")
+  runner.expect(machine.observe(left, at: "t6").events.isEmpty, "second leave poll waits")
+  let ended = machine.observe(left, at: "t7")
+  runner.expect(ended.events.count == 1, "third leave poll ends meeting")
+  runner.expect(ended.events.first?.event == .meetingEnded, "emits meeting_ended")
+  runner.expect(ended.events.first?.meetingID == "meet-1", "ended reuses meeting id")
+  runner.expect(ended.state == .idle, "state returns IDLE")
+}
+
+runner.test("Slack lifecycle join and leave") {
+  var machine = LifecycleStateMachine(
+    platform: .slackHuddle,
+    configuration: LifecycleConfiguration(startConfirmations: 2, endConfirmations: 2),
+    makeMeetingID: { "huddle-1" }
+  )
+
+  let invite = ConfidenceEvaluator.evaluate(slackEvidence(joined: false, inviteWindow: true))
+  runner.expect(machine.observe(invite, at: "t0").events.isEmpty, "invite emits nothing")
+
+  let joined = ConfidenceEvaluator.evaluate(slackEvidence(joined: true))
+  _ = machine.observe(joined, at: "t1")
+  let started = machine.observe(joined, at: "t2")
+  runner.expect(started.events.first?.event == .meetingStarted, "huddle starts")
+
+  let left = ConfidenceEvaluator.evaluate(slackEvidence(joined: false, appRunning: true))
+  _ = machine.observe(left, at: "t3")
+  let ended = machine.observe(left, at: "t4")
+  runner.expect(ended.events.first?.event == .meetingEnded, "huddle ends")
+}
+
+runner.test("transient signal loss does not end meeting") {
+  var machine = LifecycleStateMachine(
+    platform: .googleMeet,
+    configuration: LifecycleConfiguration(startConfirmations: 1, endConfirmations: 3),
+    makeMeetingID: { "meet-2" }
+  )
+  let joined = ConfidenceEvaluator.evaluate(meetEvidence(joined: true))
+  _ = machine.observe(joined, at: "t0")
+  let lost = ConfidenceEvaluator.evaluate(meetEvidence(joined: false, meetTabs: 1))
+  runner.expect(machine.observe(lost, at: "t1").events.isEmpty, "one lost poll keeps meeting")
+  let recovered = machine.observe(joined, at: "t2")
+  runner.expect(recovered.events.isEmpty, "recovery emits no second start")
+  runner.expect(recovered.state == .active, "recovery returns ACTIVE")
+}
+
+runner.test("rapid join leave and crash") {
+  var machine = LifecycleStateMachine(
+    platform: .googleMeet,
+    configuration: LifecycleConfiguration(startConfirmations: 1, endConfirmations: 1),
+    makeMeetingID: { "meet-3" }
+  )
+  let joined = ConfidenceEvaluator.evaluate(meetEvidence(joined: true))
+  let started = machine.observe(joined, at: "t0")
+  runner.expect(started.events.count == 1, "rapid start")
+
+  let crashed = ConfidenceEvaluator.evaluate(meetEvidence(joined: false, appRunning: false))
+  let ended = machine.observe(crashed, at: "t1")
+  runner.expect(ended.events.count == 1, "crash ends meeting")
+  runner.expect(ended.state == .idle, "crash returns idle")
+}
+
+runner.test("daemon runtime emits NDJSON-shaped events") {
+  let collector = CollectingEventEmitter()
+  final class IDSource: @unchecked Sendable {
+    private var values = ["id-a", "id-b"]
+    func next() -> String {
+      values.isEmpty ? "id-overflow" : values.removeFirst()
+    }
+  }
+  let ids = IDSource()
+  var runtime = DaemonRuntime(
+    configuration: LifecycleConfiguration(startConfirmations: 1, endConfirmations: 1),
+    emitter: collector,
+    writeStatus: false,
+    makeMeetingID: { ids.next() }
+  )
+
+  var accessibility = AccessibilityEvidence(platform: .googleMeet, status: .ok)
+  accessibility.meetWebAreaCount = 1
+  accessibility.meetCallControls = true
+  accessibility.meetLeaveCallControl = true
+  accessibility.meetPresentationControl = true
+
+  let activeSnapshot = ProbeSnapshot(
+    timestamp: "2026-09-04T12:00:00Z",
+    accessibilityTrusted: true,
+    applications: [
+      ApplicationSignal(
+        name: "Google Chrome",
+        bundleID: "com.google.Chrome",
+        pid: 1,
+        platform: .googleMeet
+      )
+    ],
+    audioCollectorStatus: .ok,
+    audioProcesses: [],
+    powerAssertionCollectorStatus: .ok,
+    powerAssertions: [],
+    accessibilityEvidence: [.googleMeet: accessibility]
+  )
+  _ = try runtime.process(activeSnapshot)
+  let idleSnapshot = ProbeSnapshot(
+    timestamp: "2026-09-04T12:00:01Z",
+    accessibilityTrusted: true,
+    applications: [],
+    audioCollectorStatus: .ok,
+    audioProcesses: [],
+    powerAssertionCollectorStatus: .ok,
+    powerAssertions: [],
+    accessibilityEvidence: [:]
+  )
+  _ = try runtime.process(idleSnapshot)
+
+  let events = collector.events()
+  runner.expect(events.count == 2, "runtime should emit start and end")
+  runner.expect(events[0].event == .meetingStarted, "first event is start")
+  runner.expect(events[1].event == .meetingEnded, "second event is end")
+  runner.expect(events[0].meetingID == events[1].meetingID, "ids match")
+
+  let line = String(decoding: try JSONEncoder().encode(events[0]), as: UTF8.self)
+  runner.expect(line.contains("\"event\":\"meeting_started\""), "event key encoded")
+  runner.expect(line.contains("\"meeting_id\""), "meeting_id key encoded")
+}
+
+runner.test("daemon CLI options") {
+  let options = try DaemonOptions.parse([
+    "run",
+    "--interval", "1",
+    "--start-confirmations", "2",
+    "--end-confirmations", "3",
+    "--status-file", "/tmp/meetingd-status.json",
+  ])
+  runner.expect(options.command == .run, "run command")
+  runner.expect(options.interval == 1, "interval")
+  runner.expect(options.startConfirmations == 2, "start confirmations")
+  runner.expect(options.endConfirmations == 3, "end confirmations")
+  runner.expect(options.statusPath == "/tmp/meetingd-status.json", "status path")
+
+  do {
+    _ = try DaemonOptions.parse(["record"])
+    runner.expect(false, "unknown command should fail")
+  } catch is DaemonOptionError {
+    runner.expect(true, "unknown command rejected")
+  }
+}
+
 if runner.failures == 0 {
   print("PASS \(runner.checks) checks")
 } else {
